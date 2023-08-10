@@ -1,7 +1,7 @@
-from wechat_analysis import wechat_analysis
+from wechat_analysis import job_wechat_analysis
 
 
 if __name__ == '__main__':
     print(f'Start Analysis')
-    wechat_analysis()
+    job_wechat_analysis()
     print(f'End Analysis')

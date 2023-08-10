@@ -1,0 +1,1 @@
+nohup python wechat_analysis.py &

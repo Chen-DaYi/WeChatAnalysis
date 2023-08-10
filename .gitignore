@@ -1,6 +1,7 @@
 .DS_Store
-/__pycache__
-/nohup.out
-/wechat.log
-/.env
-/data/*
+__pycache__
+nohup.out
+wechat.log
+.env
+data/*
+.vscode/settings.json

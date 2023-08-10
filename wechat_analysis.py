@@ -14,6 +14,7 @@ from modules.claude_api import Client
 load_dotenv()
 cookie = os.getenv('COOKIE')
 error_user = os.getenv('ERROR_USER')
+user_id = os.getenv('ANALYSIS_USER')
 retry_count = 0
 logging.basicConfig(filename='./wechat.log', level=logging.INFO, format='%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 logging.getLogger().setLevel(logging.INFO)
@@ -84,87 +85,85 @@ def clean_today_msg(user_id, file_path=None, is_save=True):
 
     return msg_select_df
 
-
-def _ask_claude(prompt, file_path, file_content, tag):
-    claude_api = Client(cookie)
-    conversation_id = claude_api.create_new_chat()['uuid']
-    logging.info(f'\t\tSend message - {tag}')
-    response = claude_api.send_message_withfilecontent(prompt, conversation_id, file_path=file_path, file_content=file_content)
-    logging.info(f'\t\tGet message - {tag}')
-    decoded_data = response.content.decode('utf-8')
-    data = decoded_data.strip().split('\n')[-1].replace('\\n\\n', '\\n')
-    answer = {'answer': json.loads(data[6:])['completion']}['answer']
-
-    if answer:
-        logging.info(f'\t\tGet Anwser successfully - {tag}')
-    else:
-        logging.info(f'\t\tFailed to get Anwser - {tag}')
-    # 删除会话
-    deleted = claude_api.delete_conversation(conversation_id)
-    if deleted:
-        logging.info(f'\t\tConversation deleted successfully - {tag}')
-    else:
-        logging.info(f'\t\tFailed to delete conversation - {tag}')
-    return answer
-
-
-def wechat_analysis(user_id='27577020700@chatroom'):
-    # 获取当前时间段
+def get_period():
     now = datetime.now()
-    nowdate = datetime.now().strftime('%Y%m%d')
     current_hour = now.hour + now.minute/60
-
     for time_start, time_end, time_period in time_ranges:
         if time_start <= current_hour < time_end:
             break
         next_time_start, next_time_end, next_time_period = time_start, time_end, time_period
     time_start, time_end, time_period = next_time_start, next_time_end, next_time_period
-    logging.info(f'{time_period}\t' + '-*-'*12)
-    # 读取当天微信聊天记录
-    file_path = f'./data/clean_today_{user_id}_{nowdate}.csv'
+    return time_start, time_end, time_period
+
+
+def select_analysis_msg(user_id, file_path, time_start, time_period):
     msg_select_df = clean_today_msg(user_id, file_path)
     logging.info(f'\tSum of msg: {msg_select_df.shape[0]}')
 
     # 生成ask_claude的输入
-    prompt_summary, prompt_gay = get_prompt(time_period)
+    
     msg_select_df['time'] = pd.to_datetime(msg_select_df['time'])
     msg_select_df['decimal_time'] = msg_select_df['time'].dt.hour + msg_select_df['time'].dt.minute/60  
     msg_select_df = msg_select_df[msg_select_df['decimal_time'] >= time_start]
     file_content = '\n'.join(msg_select_df['user'].str.cat(msg_select_df['send_text'], sep='\t')) # type: ignore
     # file_content = '\n'.join(msg_select_df.apply(lambda x: f"{x['time']}\t{x['user']}\t{x['send_text']}", axis=1)) # type: ignore
 
-    logging.info(f'\tSum of msg - select: {msg_select_df.shape[0]}')
+    logging.info(f'\tSum of msg - select: {msg_select_df.shape[0]}')    
+    return msg_select_df, file_content
+
+
+def ask_claude(prompts, file_path, file_content):
+    # 创建会话
+    claude_api = Client(cookie)
+    conversation_id = claude_api.create_new_chat()['uuid']
+
+    # 发送消息
+    answers = []
+    for i ,prompt in enumerate(prompts):
+        if i ==0:
+            answer = claude_api.send_message_withfilecontent(prompt, conversation_id, file_path=file_path, file_content=file_content)
+        else:
+            answer = claude_api.send_message_withfilecontent(prompt, conversation_id)
+        logging.info(f'\t\t{"Succeeded to get Answer" if answer else "Failed to get Answer"} - No.{i} Prompt')
+        answers.append(answer) if answer else None
     
+    # 删除会话
+    deleted = claude_api.delete_conversation(conversation_id)
+    logging.info(f'\t\t{"Succeeded to delete tConversation" if deleted else "Failed delete tConversation"}')
+    return answers
+
+
+def wechat_analysis(user_id):
+    
+    # 获取当前时间段
+    nowdate = datetime.now().strftime('%Y%m%d')
+    file_path = f'./data/clean_today_{user_id}_{nowdate}.csv'
+    time_start, _, time_period = get_period()
+    logging.info(f'{time_period}\t' + '-*-'*12)
+    
+    # 准备输入
+    msg_select_df, file_content = select_analysis_msg(user_id, file_path, time_start, time_period)
+    prompt_summary, prompt_gay = get_prompt(time_period)
+    
+    # 提问
     logging.info('\tAsk Claude ...')
-    answer_summary = _ask_claude(prompt_summary, file_path, file_content, 'summary')
-    answer_gay = _ask_claude(prompt_gay, file_path, file_content, 'gay')
+    answers = ask_claude([prompt_summary, prompt_gay], file_path, file_content)
     
     # 发送信息
     text_send = f'{time_period}分析聊天记录数：{len(msg_select_df)}'
-    if wechat.send_message_by_ids([user_id], text_send):
-        logging.info('\tSend successfully - answer_summary')
-    else:
-        logging.info('\tFailed to Send - headtext')
-    
-    if wechat.send_message_by_ids([user_id], answer_summary):
-        logging.info('\tSend successfully - answer_summary')
-    else:
-        logging.info('\tFailed to Send - answer_summary')
-
-    if wechat.send_message_by_ids([user_id], answer_gay):
-        logging.info('\tSend successfully - answer_gay')
-    else:
-        logging.info('\tFailed to Send - answer_gay')
+    logging.info(f'\t{ "Sent successfully" if wechat.send_message_by_ids([user_id], text_send) else "Failed to send"} - headtext')
+    logging.info(f'\t{ "Sent successfully" if wechat.send_message_by_ids([user_id], answers[0]) else "Failed to send"} - answer_summary')
+    logging.info(f'\t{ "Sent successfully" if wechat.send_message_by_ids([user_id], answers[1]) else "Failed to send"} - answer_gay')
 
 def job_wechat_analysis():
     global retry_count
     try:
-        wechat_analysis()
+        wechat_analysis(user_id)
         retry_count = 0
     except Exception as e:
         logging.error(e)
         if error_user:
-            wechat.send_message_by_ids([error_user], '分析失败，请手动分析')
+            wechat.send_message_by_ids([error_user], f'分析失败，请手动分析 - {retry_count}次')
             wechat.send_message_by_ids([error_user], e)
             retry_count += 1
             if retry_count > 3:
@@ -180,7 +179,7 @@ if __name__ == '__main__':
     # wechat.search_user_by_keyword('Sevn')
     schedule.every().day.at('11:30').do(job_wechat_analysis)
     schedule.every().day.at('17:30').do(job_wechat_analysis)
-    schedule.every().day.at('22:00').do(job_wechat_analysis)
+    schedule.every().day.at('22:30').do(job_wechat_analysis)
     logging.info('Start Analysis')
     while True:
         schedule.run_pending()
