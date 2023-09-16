@@ -157,20 +157,21 @@ def wechat_analysis(user_id):
 
 def job_wechat_analysis():
     global retry_count
-    try:
-        wechat_analysis(user_id)
-        retry_count = 0
-    except Exception as e:
-        logging.error(e)
-        if error_user:
-            wechat.send_message_by_ids([error_user], f'分析失败，请手动分析 - {retry_count}次')
-            wechat.send_message_by_ids([error_user], e)
-            retry_count += 1
-            if retry_count > 3:
-                wechat.send_message_by_ids([error_user], '!!! 重试超过3次，停止任务 !!!')
-                return # 如果重试超过3次,停止任务
-            time.sleep(30)
-        raise e
+    while True:
+        try:
+            wechat_analysis(user_id)
+            return
+        except Exception as e:
+            logging.error(e)
+            if error_user:
+                wechat.send_message_by_ids([error_user], f'分析失败，请手动分析 - {retry_count}次')
+                wechat.send_message_by_ids([error_user], e)
+                retry_count += 1
+                if retry_count >= 3:
+                    wechat.send_message_by_ids([error_user], '!!! 重试超过3次，停止任务 !!!')
+                    return # 如果重试超过3次,停止任务
+                time.sleep(30)
+            raise e
 
 if __name__ == '__main__':
     # 手动找到要分析的userId
